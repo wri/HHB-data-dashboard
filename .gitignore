@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+archive/
+
+# Raw data stays local: only the prepared data goes in the repo
+data/*
+!data/app_data.rds
+!data/.rscignore
+!data/data_dictionary.xlsx
