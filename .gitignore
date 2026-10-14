@@ -9,3 +9,4 @@ data/*
 !data/app_data.rds
 !data/.rscignore
 !data/data_dictionary.xlsx
+rsconnect/*

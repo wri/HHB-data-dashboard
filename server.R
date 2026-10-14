@@ -414,14 +414,15 @@ server <- function(input, output, session) {
           sprintf("%s (%s)", format_number(row[[line$column]], line), comparison)
         }
       }
-      tags$p(class = "mb-2", paste0(line$label, ":"), tags$br(), stats)   # mb-2 = tighter spacing between variables
+      tags$p(class = "mb-2", tags$strong(paste0(line$label, ":")), tags$br(), stats)   # mb-2 = tighter spacing between variables
     }
 
     # One wrapper, so the card's 16px gap isn't added between every variable.
+    # Two columns for the map variables, and for the two EDF lines in split view.
+    two_columns <- "display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px;"
     tags$div(
-      lapply(edf_lines, make_line),
-      tags$div(style = "display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px;",
-               lapply(map_lines, make_line))
+      tags$div(style = if (is_split()) two_columns, lapply(edf_lines, make_line)),
+      tags$div(style = two_columns, lapply(map_lines, make_line))
     )
   })
 
