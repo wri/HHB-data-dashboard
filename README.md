@@ -15,16 +15,40 @@ The app reads `data/app_data.rds`, which is built from the raw files by
 Rscript prepare_data.R      # from the HHB-data-dashboard folder
 ```
 
+## Editing text and translations
+
+All text in the app (tab names, labels, legends, chart axes, the welcome
+pop-up, the Information tab) lives in `data/translations.xlsx`, sheet `text`:
+one row per piece of text, with `english` and `portuguese` columns. The app
+reads it at startup; no R code needs changing to reword or translate anything.
+
+- Edit only the `english` and `portuguese` columns. Never change `key`.
+- Keep `{placeholders}` (e.g. `{difference} above`): the app fills them in.
+- A blank `portuguese` cell shows the English text.
+- For long text, a blank line in the cell starts a new paragraph.
+- Save, then redeploy the app. The `how to use` sheet repeats these rules.
+
+Users switch language with the **EN | PT** links at the right of the tab bar
+(they reload the page with `?lang=en` / `?lang=pt`). The language the app opens
+in is `default_language` in `global.R`. In Portuguese, numbers use a decimal
+comma (12,5%). City names, barrio names and age groups like `65+` come from the
+data and are not translated.
+
+To add a new piece of text in code, add a row with a new key to the
+spreadsheet and use `tr("your_key")` in `ui.R` / `server.R`. A key missing from
+the spreadsheet shows on screen as the key itself, with a warning in the R
+console.
+
 ## Deploying
 
-The running app only needs `app.R`, `global.R`, `ui.R`, `server.R`, `www/`
-and `data/app_data.rds` (about 3 MB). The `.rscignore` files in this folder and
+The running app only needs `app.R`, `global.R`, `ui.R`, `server.R`, `www/`,
+`data/app_data.rds` (about 3 MB) and `data/translations.xlsx`. The `.rscignore` files in this folder and
 in `data/` keep the raw data, `prepare_data.R` and `sandbox.R` out of an
 `rsconnect` deployment (e.g. shinyapps.io).
 
 ## Source data (`data/`)
 
-Only `data/app_data.rds` and `data/data_dictionary.xlsx` are in the git repo.
+Only `data/app_data.rds`, `data/translations.xlsx` and `data/data_dictionary.xlsx` are in the git repo.
 The raw data files below are kept locally (`data/*` is in `.gitignore`) and are only needed to re-run
 `prepare_data.R`; get them from the project team.
 

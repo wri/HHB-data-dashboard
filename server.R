@@ -13,15 +13,20 @@
 
 server <- function(input, output, session) {
 
+  # Language from the URL (?lang=pt), the same one the page was built in.
+  # tr("key") gives the text for a key in data/translations.xlsx.
+  lang <- get_language(isolate(session$clientData$url_search))
+  tr <- make_tr(lang)
+
   # --------------------------------------------------------------------
   # LANDING PAGE (pop-up shown when the app opens)
   # --------------------------------------------------------------------
-  # Placeholder text for now - edit the title / body below.
+  # The text is landing_title / landing_body in data/translations.xlsx.
   showModal(modalDialog(
-    title = "Heat and Health in Brasil",
-    tags$p("Heat and Health in Brasil"),   # placeholder body text
+    title = tr("landing_title"),
+    text_paragraphs(tr("landing_body")),
     easyClose = TRUE, size = "l",
-    footer = modalButton("Enter the dashboard")
+    footer = modalButton(tr("landing_button"))
   ))
 
   # --------------------------------------------------------------------
@@ -30,8 +35,8 @@ server <- function(input, output, session) {
 
   # Age-group choices depend on the city, so this dropdown is built here.
   output$age_group_ui <- renderUI({
-    choices <- age_group_choices(input$city)
-    selectInput("age_group", "Age group", choices = choices, selected = "all")
+    choices <- age_group_choices(input$city, tr)
+    selectInput("age_group", tr("label_age_group"), choices = choices, selected = "all")
   })
 
   # Health polygons for the chosen city + age group.
@@ -58,14 +63,14 @@ server <- function(input, output, session) {
   # each map) lets the user pick between them. The first is the default.
   add_basemaps <- function(map) {
     map |>
-      addProviderTiles(providers$OpenStreetMap, group = "Street") |>
+      addProviderTiles(providers$OpenStreetMap, group = tr("basemap_street")) |>
       # Short credits (the providers' default credits are very long). Esri asks for
       # credit to Esri and its imagery sources; keep at least this much.
-      addProviderTiles(providers$Esri.WorldImagery, group = "Satellite",
+      addProviderTiles(providers$Esri.WorldImagery, group = tr("basemap_satellite"),
                        options = providerTileOptions(attribution = "Imagery © Esri, Maxar, Earthstar Geographics")) |>
-      addProviderTiles(providers$Esri.WorldGrayCanvas, group = "Light",
+      addProviderTiles(providers$Esri.WorldGrayCanvas, group = tr("basemap_light"),
                        options = providerTileOptions(attribution = "Tiles © Esri")) |>
-      addLayersControl(baseGroups = c("Street", "Satellite", "Light"),
+      addLayersControl(baseGroups = c(tr("basemap_street"), tr("basemap_satellite"), tr("basemap_light")),
                        options = layersControlOptions(collapsed = TRUE), position = "topright")
   }
 
@@ -120,8 +125,8 @@ server <- function(input, output, session) {
 
   # Titles above the map(s). (The map widgets themselves live in ui.R and are
   # never rebuilt - see the note there.)
-  output$explorer_title1 <- renderUI(tags$strong(var_label(if (is_split()) "edf_dE" else single_var())))
-  output$explorer_title2 <- renderUI(tags$strong(var_label("edf_dT")))
+  output$explorer_title1 <- renderUI(tags$strong(var_label(if (is_split()) "edf_dE" else single_var(), tr)))
+  output$explorer_title2 <- renderUI(tags$strong(var_label("edf_dT", tr)))
 
   # Left (or only) map.
   output$explorer_map <- renderLeaflet({
@@ -142,25 +147,49 @@ server <- function(input, output, session) {
 
   # One horizontal legend below the map(s). Left = lower risk, right = the
   # highest-risk (darkest) end. In split view it is shared by both maps.
+  # A vertical line on a legend bar at the selected barrio's value (nothing
+  # when no barrio is selected). The bar runs from range_values[1] on the left
+  # to range_values[2] on the right; the social inclusion bar has 5 equal
+  # blocks, and the line sits in the middle of the selected category's block.
+  # Hovering the line shows the value.
+  value_marker <- function(variable, range_values = NULL, column = variable) {
+    row <- selected_polygon()
+    if (is.null(row) || nrow(row) != 1 || is.na(row[[column]])) return(NULL)
+    value <- row[[column]]
+    if (variable %in% categorical_vars) {
+      position <- (as.integer(value) - 0.5) / 5
+      value_text <- deprivation_label(value, tr)
+    } else {
+      position <- if (diff(range_values) == 0) 0.5 else (value - range_values[1]) / diff(range_values)
+      value_text <- format_value(variable, value, lang)
+    }
+    tags$span(class = "legend-marker", title = paste0(var_label(column, tr), ": ", value_text),
+              style = sprintf("left: %.2f%%; background: %s;", 100 * min(max(position, 0), 1), highlight_color))
+  }
+
   output$explorer_legend <- renderUI({
     health <- filtered_data()
     req(nrow(health) > 0)
 
     variable <- if (is_split()) "edf_dE" else single_var()
     values <- if (is_split()) c(health$edf_dE, health$edf_dT) else health[[single_var()]]
-    title <- if (is_split()) "EDF (same scale on both maps)" else var_label(single_var())
+    title <- if (is_split()) tr("legend_split_title") else var_label(single_var(), tr)
 
     range_values <- range(values, na.rm = TRUE)
     colors <- risk_colors(variable, values)(seq(range_values[1], range_values[2], length.out = 8))
     tick_values <- seq(range_values[1], range_values[2], length.out = 5)
+    # Split view: one line per map (both share this scale).
+    marker_columns <- if (is_split()) c("edf_dE", "edf_dT") else single_var()
 
     tags$div(
       style = "max-width: 480px; flex-shrink: 0; margin-top: 4px;",
       tags$div(class = "small fw-bold", title),
-      tags$div(style = sprintf("height: 12px; border-radius: 2px; background: linear-gradient(to right, %s);",
-                               paste(colors, collapse = ", "))),
+      tags$div(class = "legend-bar",
+               style = sprintf("height: 12px; border-radius: 2px; background: linear-gradient(to right, %s);",
+                               paste(colors, collapse = ", ")),
+               lapply(marker_columns, function(column) value_marker(variable, range_values, column))),
       tags$div(class = "d-flex justify-content-between small text-muted",
-               lapply(tick_values, function(x) tags$span(format_value(variable, x))))
+               lapply(tick_values, function(x) tags$span(format_value(variable, x, lang))))
     )
   })
 
@@ -289,7 +318,7 @@ server <- function(input, output, session) {
     # model is built around (rr = 1 at the 75th percentile).
     reference_temps <- city_curve |>
       filter(percentile %in% c(75, 90, 95, 99)) |>
-      mutate(label = paste0("P", percentile),
+      mutate(label = vapply(percentile, function(p) tr("curve_percentile", percentile = p), ""),
              color = c("#7f7f7f", "#ff7f0e", "#9467bd", "#8c564b")[match(percentile, c(75, 90, 95, 99))],
              label_row = c(1.1, 2.4, 1.1, 2.4)[match(percentile, c(75, 90, 95, 99))])  # stagger: P90 / P95 sit close
 
@@ -318,9 +347,13 @@ server <- function(input, output, session) {
     # clipped instead of squashing every line), plus headroom at the top for
     # the percentile labels.
     y_range <- range(curves$rr, na.rm = TRUE)
+    marks <- number_marks(lang)   # decimal comma in Portuguese
+    axis_numbers <- label_number(decimal.mark = marks$decimal, big.mark = marks$big)
     p +
       coord_cartesian(ylim = c(y_range[1], y_range[2] + 0.25 * diff(y_range))) +
-      labs(x = "Daily Mean Temperature (°C)", y = "Relative Risk") +
+      scale_x_continuous(labels = axis_numbers) +
+      scale_y_continuous(labels = axis_numbers) +
+      labs(x = tr("curve_x"), y = tr("curve_y")) +
       theme_minimal(base_size = 13)
   })
 
@@ -341,33 +374,33 @@ server <- function(input, output, session) {
     if (!is.null(selected_zone_id())) {
       barrios <- city_barrios()
       name <- barrios$barrio_name[match(selected_barrio_id(), barrios$barrio_id)]
-      if (length(name) == 0 || is.na(name)) name <- "Selected area"
+      if (length(name) == 0 || is.na(name)) name <- tr("curve_selected_area")
       selected_items <- list(
         legend_item(highlight_color, 3, tags$strong(name)),
         # the shaded band: a taller swatch in the band's colour and opacity
-        legend_item(scales::alpha(highlight_color, 0.25), 10, "95% CI")
+        legend_item(scales::alpha(highlight_color, 0.25), 10, tr("curve_ci"))
       )
     }
     tags$div(
       class = "small",
       selected_items,
-      legend_item(city_curve_color, 3, "City average"),
-      legend_item("#b3b3b3", 1, "Neighborhoods")
+      legend_item(city_curve_color, 3, tr("curve_city_average")),
+      legend_item("#b3b3b3", 1, tr("curve_neighborhoods"))
     )
   })
 
   # ---- Detail box. Title = the barrio that was clicked, or "City-wide average"
   # when nothing is selected.
   output$explorer_detail_title <- renderUI({
-    if (is.null(selected_zone_id())) return("City-wide average")
+    if (is.null(selected_zone_id())) return(tr("detail_city_wide"))
     barrios <- city_barrios()
     name <- barrios$barrio_name[match(selected_barrio_id(), barrios$barrio_id)]
-    if (length(name) == 0 || is.na(name)) name <- "No barrio at this location"
+    if (length(name) == 0 || is.na(name)) name <- tr("detail_no_barrio")
     # the name with a "Clear selection" link right next to it, and a note on
     # what the bracketed numbers below are compared to
     tags$div(
-      tags$span(name, actionLink("clear_selection", "Clear selection", class = "ms-3 small")),
-      tags$div(class = "small text-muted", "Comparison to city average in parentheses")
+      tags$span(name, actionLink("clear_selection", tr("detail_clear"), class = "ms-3 small")),
+      tags$div(class = "small text-muted", tr("detail_comparison_note"))
     )
   })
 
@@ -380,21 +413,21 @@ server <- function(input, output, session) {
     # EDF line(s) first (full width), then the six small-map variables in the
     # same order as the small maps (two columns).
     edf_columns <- if (is_split()) c("edf_dE", "edf_dT") else single_var()
-    edf_lines <- lapply(edf_columns, function(column) list(column = column, label = var_label(column), scale = 100, digits = 2, unit = "%"))
+    edf_lines <- lapply(edf_columns, function(column) list(column = column, scale = 100, digits = 2, unit = "%"))
     map_lines <- list(
-      list(column = "mean_temp",          label = "Mean temperature",       scale = 1, digits = 1, unit = "°C"),
-      list(column = "deprivation_group",  label = "Social inclusion index"),   # a category, handled separately
-      list(column = "population_density", label = "Population density",     scale = 1, digits = 0, unit = "/ha"),
-      list(column = "perc_informal",      label = "Informal settlement",    scale = 1, digits = 1, unit = "%"),
-      list(column = "perc_imperv",        label = "Impervious surface",     scale = 1, digits = 1, unit = "%"),
-      list(column = "perc_tree",          label = "Tree cover",             scale = 1, digits = 1, unit = "%")
+      list(column = "mean_temp",          scale = 1, digits = 1, unit = "°C"),
+      list(column = "deprivation_group"),   # a category, handled separately
+      list(column = "population_density", scale = 1, digits = 0, unit = "/ha"),
+      list(column = "perc_informal",      scale = 1, digits = 1, unit = "%"),
+      list(column = "perc_imperv",        scale = 1, digits = 1, unit = "%"),
+      list(column = "perc_tree",          scale = 1, digits = 1, unit = "%")
     )
 
-    format_number <- function(x, line) paste0(format(round(x * line$scale, line$digits), nsmall = line$digits, big.mark = ","), line$unit)
+    format_number <- function(x, line) paste0(format_num(x * line$scale, line$digits, lang), line$unit)
 
     # Social inclusion is a 1-5 category, so instead of an average and a
     # difference it shows just the category - and nothing city-wide.
-    category_stats <- function(column) as.character(row[[column]])
+    category_stats <- function(column) deprivation_label(row[[column]], tr)
     if (is.null(row)) map_lines <- Filter(function(line) !line$column %in% categorical_vars, map_lines)
 
     # Each variable: "Label:" on one line, the numbers on the line below.
@@ -409,12 +442,12 @@ server <- function(input, output, session) {
           # Difference from the city average in words, e.g. "(0.3 below)".
           # The header says what the brackets are compared to.
           difference <- round((row[[line$column]] - average) * line$scale, line$digits)
-          comparison <- if (difference == 0) "same" else
-            paste(format(abs(difference), nsmall = line$digits, big.mark = ","), if (difference > 0) "above" else "below")
+          comparison <- if (difference == 0) tr("detail_same") else
+            tr(if (difference > 0) "detail_above" else "detail_below", difference = format_num(abs(difference), line$digits, lang))
           sprintf("%s (%s)", format_number(row[[line$column]], line), comparison)
         }
       }
-      tags$p(class = "mb-2", tags$strong(paste0(line$label, ":")), tags$br(), stats)   # mb-2 = tighter spacing between variables
+      tags$p(class = "mb-2", tags$strong(paste0(var_label(line$column, tr), ":")), tags$br(), stats)   # mb-2 = tighter spacing between variables
     }
 
     # One wrapper, so the card's 16px gap isn't added between every variable.
@@ -438,19 +471,22 @@ server <- function(input, output, session) {
   # left to right; the darkest colour is always the highest-risk end (so for
   # tree cover the dark end is on the left, at the low values).
   mini_legend <- function(variable, values) {
+    range_values <- NULL
     if (variable %in% categorical_vars) {
-      colors <- risk_colors(variable)(deprivation_labels)   # low -> high
+      colors <- risk_colors(variable)(deprivation_levels)   # low -> high
       stops <- paste(sprintf("%s %d%% %d%%", colors, (0:4) * 20, (1:5) * 20), collapse = ", ")
-      low_label <- deprivation_labels[1]; high_label <- deprivation_labels[5]
+      low_label <- deprivation_label(1, tr); high_label <- deprivation_label(5, tr)
     } else {
       range_values <- range(values, na.rm = TRUE)
       steps <- seq(range_values[1], range_values[2], length.out = 6)
       stops <- paste(risk_colors(variable, values)(steps), collapse = ", ")
-      low_label <- format_value(variable, steps[1]); high_label <- format_value(variable, steps[6])
+      low_label <- format_value(variable, steps[1], lang); high_label <- format_value(variable, steps[6], lang)
     }
     tags$div(
       class = "small", style = "flex-shrink: 0; padding: 0 0 1px;",
-      tags$div(style = sprintf("height: 10px; border-radius: 2px; background: linear-gradient(to right, %s);", stops)),
+      tags$div(class = "legend-bar",
+               style = sprintf("height: 10px; border-radius: 2px; background: linear-gradient(to right, %s);", stops),
+               value_marker(variable, range_values)),
       tags$div(class = "d-flex justify-content-between text-muted", style = "line-height: 1.1;", tags$span(low_label), tags$span(high_label))
     )
   }
@@ -529,7 +565,7 @@ server <- function(input, output, session) {
   # ---- The Data Explorer's own city / age-group selection (dx_city /
   # dx_age_group), independent of the Heat-Health Mapping tab.
   output$dx_age_group_ui <- renderUI({
-    selectInput("dx_age_group", "Age group", choices = age_group_choices(input$dx_city), selected = "all")
+    selectInput("dx_age_group", tr("label_age_group"), choices = age_group_choices(input$dx_city, tr), selected = "all")
   })
 
   dx_city_name <- reactive(input$dx_city)
@@ -544,8 +580,8 @@ server <- function(input, output, session) {
     barrios_sf |> filter(city == dx_city_name())
   })
 
-  layer_ids <- c("barrio_outlines", unname(unlist(layer_vars)))
-  layer_label <- function(id) if (id == "barrio_outlines") "Barrio outlines" else var_label(id)
+  layer_ids <- c("barrio_outlines", layer_vars)
+  layer_label <- function(id) if (id == "barrio_outlines") tr("dx_barrio_outlines") else var_label(id, tr)
 
   # Starting state (edit here to change what is on when the tab first opens).
   layer_order   <- reactiveVal(layer_ids)   # first item = drawn on top
@@ -565,7 +601,7 @@ server <- function(input, output, session) {
     map <- leaflet(health) |> add_basemaps()
 
     # One pane + one polygon layer per health variable (no outlines).
-    for (id in unname(unlist(layer_vars))) {
+    for (id in layer_vars) {
       pane_name <- paste0("pane_", id)
       color_fun <- layer_colors(id, health[[id]])
       map <- map |>
@@ -586,7 +622,7 @@ server <- function(input, output, session) {
 
   # ---- Send visibility / opacity / stacking order to the browser
   observe({
-    req(input$main_tabs == "Data Explorer")
+    req(input$main_tabs == "dx")
     dx_data()  # re-send after the map is redrawn for a new city / age group
 
     order <- layer_order()
@@ -619,15 +655,15 @@ server <- function(input, output, session) {
       if (id == "barrio_outlines") return(NULL)   # outlines have no colour scale
 
       if (id %in% categorical_vars) {
-        colors <- layer_colors(id, NULL)(deprivation_labels)
+        colors <- layer_colors(id, NULL)(deprivation_levels)
         stops <- paste(sprintf("%s %d%% %d%%", colors, (0:4) * 20, (1:5) * 20), collapse = ", ")
-        low_label <- deprivation_labels[1]; high_label <- deprivation_labels[5]
+        low_label <- deprivation_label(1, tr); high_label <- deprivation_label(5, tr)
       } else {
         values <- health[[id]]
         range_values <- range(values, na.rm = TRUE)
         steps <- seq(range_values[1], range_values[2], length.out = 6)
         stops <- paste(layer_colors(id, values)(steps), collapse = ", ")
-        low_label <- format_value(id, steps[1]); high_label <- format_value(id, steps[6])
+        low_label <- format_value(id, steps[1], lang); high_label <- format_value(id, steps[6], lang)
       }
       tags$div(
         class = "dx-key",
@@ -639,18 +675,18 @@ server <- function(input, output, session) {
     rows <- lapply(order, function(id) {
       tags$div(
         class = "dx-row", `data-id` = id,
-        tags$span(class = "dx-handle", title = "Drag to reorder", "⠿"),
+        tags$span(class = "dx-handle", title = tr("dx_drag"), "⠿"),
         tags$div(class = "dx-name", title = layer_label(id),
                  checkboxInput(paste0("show_", id), layer_label(id), value = isTRUE(show[[id]]))),
-        if (id != "barrio_outlines") actionLink(paste0("hist_", id), icon("chart-column"), class = "dx-hist", title = "Show histogram"),
-        tags$span(class = "dx-toggle", title = "Show legend and opacity",
+        if (id != "barrio_outlines") actionLink(paste0("hist_", id), icon("chart-column"), class = "dx-hist", title = tr("dx_hist_tooltip")),
+        tags$span(class = "dx-toggle", title = tr("dx_toggle_tooltip"),
                   onclick = "this.closest('.dx-row').classList.toggle('open')", "▸"),
         # Hidden until the arrow is clicked:
         tags$div(class = "dx-detail",
                  color_key(id),
                  sliderInput(paste0("opacity_", id), NULL, min = 0, max = 1, value = opacity[[id]],
                              step = 0.05, ticks = FALSE, width = "100%"),
-                 tags$div(style = "margin-top: 6px;", "Opacity slider"))
+                 tags$div(style = "margin-top: 6px;", tr("dx_opacity")))
       )
     })
     tags$div(id = "dx_list", do.call(tagList, rows))
@@ -670,14 +706,17 @@ server <- function(input, output, session) {
 
     if (variable %in% categorical_vars) {
       counts <- as.data.frame(table(values), stringsAsFactors = FALSE)
-      p <- ggplot(counts, aes(x = values, y = Freq)) + geom_col(fill = "#8c2981") + labs(x = NULL, y = "Number of health polygons")
+      p <- ggplot(counts, aes(x = values, y = Freq)) + geom_col(fill = "#8c2981") +
+        scale_x_discrete(labels = function(x) deprivation_label(x, tr)) +
+        labs(x = NULL, y = tr("hist_y"))
     } else {
       p <- ggplot(data.frame(x = values), aes(x = x)) +
         geom_histogram(bins = 20, fill = "#8c2981", color = "white", na.rm = TRUE) +
-        scale_x_continuous(labels = function(x) format_value(variable, x)) +
-        labs(x = NULL, y = "Number of health polygons")
+        scale_x_continuous(labels = function(x) format_value(variable, x, lang)) +
+        labs(x = NULL, y = tr("hist_y"))
     }
-    p + labs(subtitle = paste(dx_city_name(), "- age group", age_group_label(dx_age_name()))) + theme_minimal(base_size = 13)
+    subtitle <- tr("hist_subtitle", city = dx_city_name(), age_group = age_group_label(dx_age_name(), tr))
+    p + labs(subtitle = subtitle) + theme_minimal(base_size = 13)
   })
 
   # ---- React to each layer's controls
@@ -700,9 +739,9 @@ server <- function(input, output, session) {
 
       observeEvent(input[[paste0("hist_", layer)]], {
         hist_variable(layer)
-        showModal(modalDialog(title = paste(layer_label(layer), "- distribution"),
+        showModal(modalDialog(title = tr("hist_title", layer = layer_label(layer)),
                               plotOutput("hist_plot", height = 320),
-                              easyClose = TRUE, footer = modalButton("Close"), size = "m"))
+                              easyClose = TRUE, footer = modalButton(tr("modal_close")), size = "m"))
       }, ignoreInit = TRUE)
     })
   }
